@@ -1,15 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.bankpush.forwarder">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
         android:label="Bank Push Forwarder"
-        android:theme="@style/Theme.Material3.Light.NoActionBar"
+        android:theme="@style/Theme.BankPush"
         android:networkSecurityConfig="@xml/network_security_config">
 
         <activity
@@ -21,7 +19,6 @@
             </intent-filter>
         </activity>
 
-        <!-- Ключевой компонент: слушатель уведомлений -->
         <service
             android:name=".NotificationCatcherService"
             android:exported="true"
