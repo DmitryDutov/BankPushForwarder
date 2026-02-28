@@ -4,7 +4,6 @@ import com.bankpush.forwarder.models.BankNotification
 
 object BankNotificationParser {
 
-    // Пакеты банковских приложений
     private val BANK_PACKAGES = mapOf(
         "ru.sberbankmobile" to "Сбербанк",
         "ru.sberbank.android" to "Сбербанк",
@@ -25,7 +24,6 @@ object BankNotificationParser {
         "com.beeline.dc" to "Билайн",
     )
 
-    // Дополнительные пакеты, которые можно добавить
     private val CUSTOM_PACKAGES = mutableMapOf<String, String>()
 
     fun addCustomBank(packageName: String, bankName: String) {
@@ -37,14 +35,9 @@ object BankNotificationParser {
     }
 
     fun getBankName(packageName: String): String {
-        return BANK_PACKAGES[packageName]
-            ?: CUSTOM_PACKAGES[packageName]
-            ?: packageName
+        return BANK_PACKAGES[packageName] ?: CUSTOM_PACKAGES[packageName] ?: packageName
     }
 
-    /**
-     * Главный метод парсинга
-     */
     fun parse(packageName: String, title: String, text: String): BankNotification {
         val bankName = getBankName(packageName)
         val fullText = "$title $text"
@@ -58,14 +51,11 @@ object BankNotificationParser {
             currency = extractCurrency(fullText),
             operationType = extractOperationType(fullText),
             cardLast4 = extractCardLast4(fullText),
-            merchant = extractMerchant(text, bankName),
+            merchant = extractMerchant(text),
             balance = extractBalance(fullText)
         )
     }
 
-    /**
-     * Извлечение суммы операции
-     */
     private fun extractAmount(text: String): Double? {
         val patterns = listOf(
             Regex("""(?:списан[иеоа]|покупка|оплата|перевод|зачислен[иеоа]|пополнение|возврат|снятие)\s*:?\s*([\d\s]+[.,]\d{2})\s*([₽$€\w]{1,3})?""", RegexOption.IGNORE_CASE),
@@ -74,20 +64,17 @@ object BankNotificationParser {
             Regex("""(?:₽|руб|RUB|USD|\$|EUR|€)\s*([\d\s]+[.,]\d{2})""", RegexOption.IGNORE_CASE),
             Regex("""(\d[\d\s]*[.,]\d{2})(?:\s|$|[^0-9])"""),
         )
-
         for (pattern in patterns) {
             val match = pattern.find(text)
             if (match != null) {
-                val raw = match.groupValues[1]
-                    .replace(" ", "")
-                    .replace(",", ".")
+                val raw = match.groupValues[1].replace(" ", "").replace(",", ".")
                 return raw.toDoubleOrNull()
             }
         }
         return null
     }
 
-    private fun extractCurrency(text: String): String? {
+    private fun extractCurrency(text: String): String {
         return when {
             Regex("""[₽]|руб|RUB""", RegexOption.IGNORE_CASE).containsMatchIn(text) -> "RUB"
             Regex("""[$]|USD|долл""", RegexOption.IGNORE_CASE).containsMatchIn(text) -> "USD"
@@ -100,28 +87,24 @@ object BankNotificationParser {
         val lower = text.lowercase()
         return when {
             lower.contains("списан") || lower.contains("покупка") ||
-            lower.contains("оплата") || lower.contains("снятие") -> "Списание"
+            lower.contains("оплата") || lower.contains("снятие") -> "EXPENSE"
 
             lower.contains("зачислен") || lower.contains("пополнен") ||
             lower.contains("получен") || lower.contains("начислен") ||
-            lower.contains("возврат") -> "Зачисление"
+            lower.contains("возврат") -> "INCOME"
 
-            lower.contains("перевод") || lower.contains("отправлен") -> "Перевод"
+            lower.contains("перевод") || lower.contains("отправлен") -> "TRANSFER"
 
             else -> null
         }
     }
 
-    /**
-     * Извлечение последних 4 цифр карты
-     */
     private fun extractCardLast4(text: String): String? {
         val patterns = listOf(
             Regex("""[*·•]+\s*(\d{4})"""),
             Regex("""(?:карт[аы]|card|счёт|счет)\s*(?:[*·•]*\s*)?(\d{4})""", RegexOption.IGNORE_CASE),
             Regex("""(?:Visa|MasterCard|Мир|МИР)\s*(\d{4})""", RegexOption.IGNORE_CASE),
         )
-
         for (p in patterns) {
             val match = p.find(text)
             if (match != null) return match.groupValues[1]
@@ -129,15 +112,11 @@ object BankNotificationParser {
         return null
     }
 
-    /**
-     * Извлечение названия мерчанта/магазина
-     */
-    private fun extractMerchant(text: String, bankName: String): String? {
+    private fun extractMerchant(text: String): String? {
         val patterns = listOf(
             Regex("""(?:[\d.,]+\s*(?:₽|руб|RUB))\s+([A-Za-zА-Яа-яЁё][\w\s\-А-Яа-яЁё]{2,30}?)(?:\s*\.?\s*(?:Баланс|Остаток|Доступно)|$)""", RegexOption.IGNORE_CASE),
             Regex("""в\s+(?:магазине|ресторане)?\s*([А-Яа-яЁё\w][\w\s\-]{2,30})""", RegexOption.IGNORE_CASE),
         )
-
         for (p in patterns) {
             val match = p.find(text)
             if (match != null) {
@@ -148,79 +127,9 @@ object BankNotificationParser {
         return null
     }
 
-    /**
-     * Извлечение баланса
-     */
     private fun extractBalance(text: String): Double? {
-        val patterns = listOf(
-            Regex("""(?:баланс|остаток|доступно)\s*:?\s*([\d\s]+[.,]\d{2})""", RegexOption.IGNORE_CASE),
-        )
-        for (p in patterns) {
-            val match = p.find(text)
-            if (match != null) {
-                val raw = match.groupValues[1].replace(" ", "").replace(",", ".")
-                return raw.toDoubleOrNull()
-            }
-        }
-        return null
-    }
-
-    /**
-     * Форматирование для отправки в Telegram
-     */
-    fun formatForTelegram(n: BankNotification): String {
-        val sb = StringBuilder()
-        sb.appendLine("🏦 *${escMd(n.bankName)}*")
-
-        if (n.operationType != null) {
-            val emoji = when (n.operationType) {
-                "Списание" -> "🔴"
-                "Зачисление" -> "🟢"
-                "Перевод" -> "🔵"
-                else -> "⚪"
-            }
-            sb.appendLine("$emoji ${escMd(n.operationType)}")
-        }
-
-        if (n.amount != null) {
-            val sign = if (n.operationType == "Списание") "-" else
-                       if (n.operationType == "Зачисление") "+" else ""
-            sb.appendLine("💰 ${sign}${formatMoney(n.amount)} ${n.currency ?: ""}")
-        }
-
-        if (n.cardLast4 != null) {
-            sb.appendLine("💳 \\*\\*${n.cardLast4}")
-        }
-
-        if (n.merchant != null) {
-            sb.appendLine("🏪 ${escMd(n.merchant)}")
-        }
-
-        if (n.balance != null) {
-            sb.appendLine("📊 Баланс: ${formatMoney(n.balance)} ${n.currency ?: ""}")
-        }
-
-        sb.appendLine("🕐 ${formatTime(n.timestamp)}")
-        sb.appendLine()
-        sb.appendLine("_Исходное:_ `${escMd(n.rawText)}`")
-
-        return sb.toString()
-    }
-
-    private fun escMd(s: String): String {
-        return s.replace("_", "\\_")
-            .replace("*", "\\*")
-            .replace("[", "\\[")
-            .replace("]", "\\]")
-            .replace("`", "\\`")
-    }
-
-    private fun formatMoney(amount: Double): String {
-        return String.format("%,.2f", amount)
-    }
-
-    private fun formatTime(ts: Long): String {
-        val sdf = java.text.SimpleDateFormat("dd.MM.yyyy HH:mm:ss", java.util.Locale("ru"))
-        return sdf.format(java.util.Date(ts))
+        val pattern = Regex("""(?:баланс|остаток|доступно)\s*:?\s*([\d\s]+[.,]\d{2})""", RegexOption.IGNORE_CASE)
+        val match = pattern.find(text) ?: return null
+        return match.groupValues[1].replace(" ", "").replace(",", ".").toDoubleOrNull()
     }
 }

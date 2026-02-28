@@ -17,7 +17,28 @@ object TelegramSender {
         .build()
 
     /**
-     * Отправка одного уведомления
+     * Конвертация уведомления в JSON для Telegram-бота.
+     * Вся умная логика (маппинг карт, категории, трансферы) — на стороне бота.
+     */
+    fun notificationToJson(n: BankNotification): JSONObject {
+        return JSONObject().apply {
+            put("version", "2.0")
+            put("bank_name", n.bankName)
+            put("package_name", n.packageName)
+            put("card_last4", n.cardLast4)
+            put("amount", n.amount)
+            put("currency", n.currency ?: "RUB")
+            put("operation_type", n.operationType)
+            put("merchant", n.merchant)
+            put("balance", n.balance)
+            put("raw_title", n.rawTitle)
+            put("raw_text", n.rawText)
+            put("timestamp", n.timestamp)
+        }
+    }
+
+    /**
+     * Отправка уведомления как JSON
      */
     suspend fun send(
         botToken: String,
@@ -25,35 +46,12 @@ object TelegramSender {
         notification: BankNotification
     ): Boolean = withContext(Dispatchers.IO) {
         try {
-            val message = BankNotificationParser.formatForTelegram(notification)
-            sendMessage(botToken, chatId, message)
+            val json = notificationToJson(notification)
+            // Оборачиваем в code-блок чтобы бот мог легко парсить
+            val message = "```json\n${json.toString(2)}\n```"
+            sendMessage(botToken, chatId, message, parseMode = "MarkdownV2")
         } catch (e: Exception) {
             Log.e("TelegramSender", "Error sending", e)
-            false
-        }
-    }
-
-    /**
-     * Отправка пачки уведомлений одним сообщением
-     */
-    suspend fun sendBatch(
-        botToken: String,
-        chatId: String,
-        notifications: List<BankNotification>
-    ): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val sb = StringBuilder()
-            sb.appendLine("📋 *Пачка уведомлений \\(${notifications.size}\\)*")
-            sb.appendLine("━━━━━━━━━━━━━━━━━━")
-
-            notifications.forEach { n ->
-                sb.appendLine(BankNotificationParser.formatForTelegram(n))
-                sb.appendLine("━━━━━━━━━━━━━━━━━━")
-            }
-
-            sendMessage(botToken, chatId, sb.toString())
-        } catch (e: Exception) {
-            Log.e("TelegramSender", "Error sending batch", e)
             false
         }
     }
@@ -69,65 +67,39 @@ object TelegramSender {
         sendMessage(botToken, chatId, text)
     }
 
-    private fun sendMessage(botToken: String, chatId: String, text: String): Boolean {
+    private fun sendMessage(
+        botToken: String,
+        chatId: String,
+        text: String,
+        parseMode: String? = null
+    ): Boolean {
         val url = "https://api.telegram.org/bot${botToken}/sendMessage"
 
         val json = JSONObject().apply {
             put("chat_id", chatId)
             put("text", text)
-            put("parse_mode", "MarkdownV2")
+            if (parseMode != null) put("parse_mode", parseMode)
             put("disable_web_page_preview", true)
         }
 
-        val body = json.toString()
-            .toRequestBody("application/json".toMediaType())
+        val body = json.toString().toRequestBody("application/json".toMediaType())
+        val request = Request.Builder().url(url).post(body).build()
 
-        val request = Request.Builder()
-            .url(url)
-            .post(body)
-            .build()
+        return try {
+            val response = client.newCall(request).execute()
+            val responseBody = response.body?.string()
+            Log.d("TelegramSender", "Response ${response.code}: $responseBody")
 
-        val response = client.newCall(request).execute()
-        val responseBody = response.body?.string()
-
-        Log.d("TelegramSender", "Response ${response.code}: $responseBody")
-
-        // Если MarkdownV2 сломался — отправляем как plain text
-        if (!response.isSuccessful && response.code == 400) {
-            return sendPlainText(botToken, chatId, text)
+            // Если парсинг markdown не удался — шлём plain JSON
+            if (!response.isSuccessful && response.code == 400 && parseMode != null) {
+                sendMessage(botToken, chatId, text, parseMode = null)
+            } else {
+                response.isSuccessful
+            }
+        } catch (e: Exception) {
+            Log.e("TelegramSender", "Network error", e)
+            false
         }
-
-        return response.isSuccessful
-    }
-
-    private fun sendPlainText(botToken: String, chatId: String, text: String): Boolean {
-        val url = "https://api.telegram.org/bot${botToken}/sendMessage"
-
-        val cleanText = text
-            .replace("\\*", "*")
-            .replace("\\_", "_")
-            .replace("\\[", "[")
-            .replace("\\]", "]")
-            .replace("\\`", "`")
-            .replace("*", "")
-            .replace("_", "")
-            .replace("`", "")
-
-        val json = JSONObject().apply {
-            put("chat_id", chatId)
-            put("text", cleanText)
-        }
-
-        val body = json.toString()
-            .toRequestBody("application/json".toMediaType())
-
-        val request = Request.Builder()
-            .url(url)
-            .post(body)
-            .build()
-
-        val response = client.newCall(request).execute()
-        return response.isSuccessful
     }
 
     /**
@@ -141,9 +113,7 @@ object TelegramSender {
             val body = response.body?.string()
 
             if (response.isSuccessful && body != null) {
-                val json = JSONObject(body)
-                val botName = json.getJSONObject("result").getString("username")
-                botName
+                JSONObject(body).getJSONObject("result").getString("username")
             } else null
         } catch (e: Exception) {
             null
